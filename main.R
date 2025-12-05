@@ -11,3 +11,4 @@ fuma <- read_fuma("inputs/Hisp.txt")
 print(fuma)      # Quick overview
 summary(fuma)    # Detailed statistics
 fuma$data        # Access the data frame directly
+
