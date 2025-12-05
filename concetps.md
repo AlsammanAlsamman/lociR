@@ -13,3 +13,6 @@ So The idea is to split the FUMA locus to the previuosl know independt loci and 
 We can have multiple FUMA we will algin them , so we can merge the intrecrossed loci , the ouput and can then be used with the previuolsy identified to be splitted
 
 All the SNPs higher than 5E-8, will be extracted along with the 1000 around each siginficant SNP then usinque these SNPs will be extracted and the LD will be caluclated to idnetify how many idnentpent locus within each have a SNP with significant threshold
+
+
+WHat if the LOCI from FUMA is big and no known sub loci? it should be flagged, we should have flags

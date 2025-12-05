@@ -16,3 +16,8 @@ inputs/*
 # System files
 .DS_Store
 Thumbs.db
+logs/
+temp/
+results/
+outputs/
+inputs/
