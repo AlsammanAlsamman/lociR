@@ -97,17 +97,17 @@ standardize_columns <- function(data,
         }
       } else if (choice == "3") {
         # Remove unmapped columns
+        data <- data[, mapped_indices, drop = FALSE]
+        new_cols <- new_cols[mapped_indices]
+        original_cols <- original_cols[mapped_indices]
+      }
+      # If choice == "1" or anything else, keep original names (already set)
+      
     } else if (strict) {
       stop("Unmapped columns found: ", paste(unmapped, collapse = ", "), 
            "\nAdd them to column_map or set strict=FALSE")
     }
-    # If not interactive and not strict, warning was already issued above stop("Unmapped columns found: ", paste(unmapped, collapse = ", "), 
-           "\nAdd them to column_map or set strict=FALSE")
-    } else {
-      # Keep original names for unmapped columns (already set in new_cols)
-      message("Keeping original names for unmapped columns: ", 
-              paste(unmapped, collapse = ", "))
-    }
+    # If not interactive and not strict, warning was already issued above
   }
   
   # Check for duplicate column names after mapping
@@ -129,10 +129,13 @@ standardize_columns <- function(data,
   # Print mapping summary
   changes <- original_cols != new_cols
   if (any(changes)) {
-    cat("\nColumn mapping applied:\n")
+    cat("\n=== Column Standardization Report ===\n")
     for (i in which(changes)) {
       cat(sprintf("  %s -> %s\n", original_cols[i], new_cols[i]))
     }
+    cat("===================================\n")
+  } else {
+    cat("\nNo column name changes needed (all already standardized)\n")
   }
   
   return(data)

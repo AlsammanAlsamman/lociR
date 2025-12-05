@@ -17,11 +17,13 @@ read_fuma <- function(file_path) {
                           stringsAsFactors = FALSE,
                           comment.char = "")
   
+  # Standardize column names
+  message("\n--- Standardizing column names ---")
+  fuma_data <- standardize_columns(fuma_data, strict = FALSE)
+  message("--- Standardization complete ---\n")
+  
   # Validate required columns (after standardization)
   required_cols <- c("LOCUS", "CHR", "POS", "P", "START", "END", "RSID")
-  missing_cols <- setdiff(required_cols, colnames(fuma_data))
-  # Validate required columns
-  required_cols <- c("GenomicLocus", "chr", "pos", "p", "start", "end", "rsID")
   missing_cols <- setdiff(required_cols, colnames(fuma_data))
   
   if (length(missing_cols) > 0) {
