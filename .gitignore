@@ -1,0 +1,18 @@
+# R specific
+.Rhistory
+.RData
+.Rproj.user
+*.Rproj
+
+# Data files
+inputs/*
+!inputs/.gitkeep
+
+# Output files
+*.pdf
+*.png
+*.jpeg
+
+# System files
+.DS_Store
+Thumbs.db
