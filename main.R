@@ -23,10 +23,14 @@ fuma_list <- read_fuma(c(
   "inputs/HispEURCHI.txt"
 ))
 
-# Access individual files
-fuma_list$Hisp.txt
-fuma_list$HispCHI.txt
 
-# Or use list.files to get all FUMA files
-all_fuma <- read_fuma(list.files("inputs", pattern = "^Hisp.*\\.txt$", full.names = TRUE))
+
+# Merge overlapping loci only
+merged <- merge_fuma_loci(fuma_list)
+
+# Merge loci within 100kb
+merged <- merge_fuma_loci(fuma_list, max_distance = 100000)
+
+# View results
+print_merged_loci(merged, n = 5)
 
