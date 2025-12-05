@@ -34,3 +34,4 @@ merged <- merge_fuma_loci(fuma_list, max_distance = 100000)
 # View results
 print_merged_loci(merged, n = 5)
 
+merged

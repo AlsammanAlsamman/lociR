@@ -1,9 +1,10 @@
 #' Read FUMA genomic loci file(s)
 #'
 #' @param file_path Character string or vector. Path(s) to FUMA output file(s)
+#' @param strip_extension Character vector. File extensions to remove from names. Default: c(".txt", ".tsv")
 #' @return If single file: Object of class 'FUMA'. If multiple files: List of FUMA objects
 #' @export
-read_fuma <- function(file_path) {
+read_fuma <- function(file_path, strip_extension = c(".txt", ".tsv")) {
   
   # Handle multiple files
   if (length(file_path) > 1) {
@@ -14,8 +15,19 @@ read_fuma <- function(file_path) {
       read_fuma_single(file_path[i])
     })
     
-    # Name the list elements by file names
-    names(fuma_list) <- basename(file_path)
+    # Name the list elements by file names (without extensions)
+    file_names <- basename(file_path)
+    
+    # Remove specified extensions
+    if (!is.null(strip_extension) && length(strip_extension) > 0) {
+      for (ext in strip_extension) {
+        # Escape special regex characters in extension
+        ext_pattern <- paste0(gsub("([.|()\\^{}+$*?])", "\\\\\\1", ext), "$")
+        file_names <- sub(ext_pattern, "", file_names, ignore.case = TRUE)
+      }
+    }
+    
+    names(fuma_list) <- file_names
     
     message("\n=== All files loaded successfully ===\n")
     return(fuma_list)
