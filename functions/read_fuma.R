@@ -1,9 +1,37 @@
-#' Read FUMA genomic loci file
+#' Read FUMA genomic loci file(s)
+#'
+#' @param file_path Character string or vector. Path(s) to FUMA output file(s)
+#' @return If single file: Object of class 'FUMA'. If multiple files: List of FUMA objects
+#' @export
+read_fuma <- function(file_path) {
+  
+  # Handle multiple files
+  if (length(file_path) > 1) {
+    message(sprintf("Reading %d FUMA files...\n", length(file_path)))
+    
+    fuma_list <- lapply(seq_along(file_path), function(i) {
+      message(sprintf("\n[%d/%d] Processing: %s", i, length(file_path), basename(file_path[i])))
+      read_fuma_single(file_path[i])
+    })
+    
+    # Name the list elements by file names
+    names(fuma_list) <- basename(file_path)
+    
+    message("\n=== All files loaded successfully ===\n")
+    return(fuma_list)
+  }
+  
+  # Single file
+  return(read_fuma_single(file_path))
+}
+
+
+#' Read a single FUMA genomic loci file
 #'
 #' @param file_path Character string. Path to FUMA output file
 #' @return Object of class 'FUMA' containing the loci data and metadata
-#' @export
-read_fuma <- function(file_path) {
+#' @keywords internal
+read_fuma_single <- function(file_path) {
   
   # Check file exists
   if (!file.exists(file_path)) {
