@@ -105,27 +105,31 @@ export_merged_to_excel <- function(merged_loci, fuma_list, output_file) {
     )
     
     excel_data[[length(excel_data) + 1]] <- merged_row
-    
-    # Add empty row for separation
-    if (i < nrow(merged_loci)) {
-      empty_row <- data.frame(matrix(NA, nrow = 1, ncol = 15))
-    # Add empty row for separation
-    if (i < nrow(merged_loci)) {
-      empty_row <- data.frame(matrix(NA, nrow = 1, ncol = 12))
-      colnames(empty_row) <- colnames(merged_row)
-      excel_data[[length(excel_data) + 1]] <- empty_row
-    # Add empty row for separation
-    if (i < nrow(merged_loci)) {
-      empty_row <- data.frame(matrix(NA, nrow = 1, ncol = 7))
-      colnames(empty_row) <- colnames(merged_row)
-      excel_data[[length(excel_data) + 1]] <- empty_row
-    }add_worksheet("Merged_Loci")
+  }
+  
+  # Combine all data
+  final_data <- do.call(rbind, excel_data)
+  
+  # Pre-compute which merged locus each row belongs to
+  row_to_merged_id <- character(nrow(final_data))
+  current_id <- ""
+  for (i in seq_len(nrow(final_data))) {
+    if (!is.na(final_data$MERGED_LOCUS_ID[i]) && final_data$MERGED_LOCUS_ID[i] != "") {
+      current_id <- final_data$MERGED_LOCUS_ID[i]
+    }
+    row_to_merged_id[i] <- current_id
+  }
+  
+  # Create workbook
+  wb <- openxlsx2::wb_workbook()
+  wb$add_worksheet("Merged_Loci")
   
   # Write data
   wb$add_data(sheet = "Merged_Loci", x = final_data, start_row = 1, start_col = 1)
   
-  # Merge cells in first column for each locus group
-  for (merge_range in merge_ranges) {
+  # Merge cells and apply alternating background colors
+  for (i in seq_along(merge_ranges)) {
+    merge_range <- merge_ranges[[i]]
     start_excel_row <- merge_range[1] + 1  # +1 for header
     end_excel_row <- merge_range[2] + 1
     
@@ -139,6 +143,18 @@ export_merged_to_excel <- function(merged_loci, fuma_list, output_file) {
                        horizontal = "center",
                        vertical = "center")
     }
+    
+    # Apply alternating background color for entire locus group
+    # Odd groups: darker gray, Even groups: white
+    if (i %% 2 == 1) {
+      # Darker gray background for odd groups
+      for (row in start_excel_row:end_excel_row) {
+        row_range <- paste0("A", row, ":", openxlsx2::int2col(ncol(final_data)), row)
+        wb$add_fill(sheet = "Merged_Loci", dims = row_range, 
+                   color = openxlsx2::wb_color(hex = "FFE0E0E0"))
+      }
+    }
+    # Even groups remain white (default)
   }
   
   # Number of visualization columns
