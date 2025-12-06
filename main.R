@@ -24,6 +24,14 @@ fuma_list <- read_fuma(c(
 ))
 
 
+# Read FUMA files
+fuma_list <- read_fuma(c("inputs/Hisp.txt", "inputs/HispCHI.txt", "inputs/HispEUR.txt"))
+
+# Merge loci
+merged <- merge_fuma_loci(fuma_list)
+
+# Export to Excel with visualization
+export_merged_to_excel(merged, fuma_list, output_file = "merged_loci.xlsx")
 
 # Merge overlapping loci only
 merged <- merge_fuma_loci(fuma_list)
@@ -34,4 +42,14 @@ merged <- merge_fuma_loci(fuma_list, max_distance = 100000)
 # View results
 print_merged_loci(merged, n = 5)
 
-merged
+# Save all plots to folder (PDF)
+export_merged_plots(merged, output_folder = "plots/merged_loci")
+
+# PNG format
+export_merged_plots(merged, output_folder = "plots/merged_loci", format = "png", dpi = 300)
+
+# SVG format for high quality
+export_merged_plots(merged, output_folder = "plots/merged_loci", format = "svg")
+
+# Custom size
+export_merged_plots(merged, output_folder = "plots", width = 12, height = 5)
