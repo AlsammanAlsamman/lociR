@@ -21,3 +21,8 @@ temp/
 results/
 outputs/
 inputs/
+*.xlsx
+*.csv
+*.tsv
+*.rds
+*.RData
