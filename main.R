@@ -1,3 +1,4 @@
+setwd("/s/nath-lab/alsamman/____MyCodes____/lociR")
 # Main script for lociR package
 # Load libraries
 source("libraries.R")
@@ -53,3 +54,14 @@ export_merged_plots(merged, output_folder = "plots/merged_loci", format = "svg")
 
 # Custom size
 export_merged_plots(merged, output_folder = "plots", width = 12, height = 5)
+
+# Read reported loci
+mehdi <- read_reported_loci("inputs/mehdi2024.txt")
+mehdi
+
+# Refine with reported loci
+refined <- refine_with_reported(merged, mehdi)
+summary(refined)
+
+# Export refined loci to Excel
+export_refined_to_excel(refined, "refined_loci.xlsx")

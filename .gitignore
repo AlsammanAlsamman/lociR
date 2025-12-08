@@ -26,3 +26,4 @@ inputs/
 *.tsv
 *.rds
 *.RData
+*.svg
