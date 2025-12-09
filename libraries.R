@@ -10,6 +10,9 @@ library(RColorBrewer)
 library(scales)
 library(gridExtra)
 
+# Fast file reading
+library(data.table)
+
 # Excel export: install if missing and load
 if (!requireNamespace("openxlsx2", quietly = TRUE)) {
     install.packages("openxlsx2")

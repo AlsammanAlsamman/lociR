@@ -50,12 +50,11 @@ read_fuma_single <- function(file_path) {
     stop("File not found: ", file_path)
   }
   
-  # Read the file
-  fuma_data <- read.table(file_path, 
-                          header = TRUE, 
-                          sep = "\t",
-                          stringsAsFactors = FALSE,
-                          comment.char = "")
+  # Read the file using fread for faster reading
+  fuma_data <- data.table::fread(file_path, 
+                                 header = TRUE, 
+                                 sep = "\t",
+                                 data.table = FALSE)
   
   # Standardize column names
   message("\n--- Standardizing column names ---")

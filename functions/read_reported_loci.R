@@ -64,15 +64,13 @@ read_reported_loci_single <- function(file_path,
     stop("File not found: ", file_path)
   }
   
-  # Read the file based on type
+  # Read the file based on type using fread for faster reading
   if (file_type == "tab") {
-    data <- read.table(file_path, 
-                      header = header, 
-                      sep = "\t", 
-                      stringsAsFactors = FALSE,
-                      comment.char = "",
-                      quote = "",
-                      fill = TRUE)
+    data <- data.table::fread(file_path, 
+                             header = header, 
+                             sep = "\t", 
+                             data.table = FALSE,
+                             fill = TRUE)
   } else {
     stop("Unsupported file type: ", file_type)
   }

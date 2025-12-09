@@ -222,23 +222,23 @@ export_refined_to_excel <- function(refined_loci, output_file) {
           rel_start <- max(0, min(1, rel_start))
           rel_end <- max(0, min(1, rel_end))
           
-          # Convert to column indices
-          scaled_start <- vis_start_col + floor(rel_start * n_vis_cols)
-          scaled_end <- vis_start_col + ceiling(rel_end * n_vis_cols) - 1
+          # Convert to column indices using proper rounding
+          scaled_start <- vis_start_col + round(rel_start * n_vis_cols)
+          scaled_end <- vis_start_col + round(rel_end * n_vis_cols)
           
-          # Ensure at least one column is filled
-          if (scaled_start > scaled_end) {
-            scaled_end <- scaled_start
+          # Only fill if the region is large enough to span at least one column
+          # For very small regions (like 1bp in a large merged region), they won't show
+          if (scaled_end > scaled_start) {
+            # Fill visualization cells
+            for (col_idx in scaled_start:min(scaled_end - 1, vis_start_col + n_vis_cols - 1)) {
+              cell_ref <- openxlsx2::int2col(col_idx)
+              cell_address <- paste0(cell_ref, excel_row)
+              
+              wb$add_fill(sheet = "Refined_Loci", dims = cell_address, 
+                         color = openxlsx2::wb_color(hex = fill_color))
+            }
           }
-          
-          # Fill visualization cells
-          for (col_idx in scaled_start:min(scaled_end, vis_start_col + n_vis_cols - 1)) {
-            cell_ref <- openxlsx2::int2col(col_idx)
-            cell_address <- paste0(cell_ref, excel_row)
-            
-            wb$add_fill(sheet = "Refined_Loci", dims = cell_address, 
-                       color = openxlsx2::wb_color(hex = fill_color))
-          }
+          # If scaled_start == scaled_end, the region is too small to visualize, so skip
         }
       }
     }
