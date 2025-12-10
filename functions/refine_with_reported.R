@@ -6,6 +6,8 @@
 #'
 #' @param merged_loci data.frame with merged loci (output from merge_fuma_loci)
 #' @param reported_loci data.frame or list of ReportedLoci objects
+#' @param max_distance Integer. Maximum distance (bp) to consider a reported locus 
+#'        as overlapping with a merged locus. Default: 0 (only direct overlaps)
 #' @param merge_overlapping_reported Logical, whether to merge overlapping reported 
 #'        loci within the same merged region before splitting (default: TRUE)
 #' @param keep_unmatched Logical, whether to keep merged loci with no overlapping 
@@ -25,6 +27,7 @@
 #' @export
 refine_with_reported <- function(merged_loci,
                                   reported_loci,
+                                  max_distance = 250000,
                                   merge_overlapping_reported = TRUE,
                                   keep_unmatched = TRUE) {
   
@@ -55,9 +58,9 @@ refine_with_reported <- function(merged_loci,
     stop("reported_loci missing required columns: ", 
          paste(setdiff(required_reported, colnames(reported_loci)), collapse = ", "))
   }
-  
   message("Refining ", nrow(merged_loci), " merged loci using ", 
           nrow(reported_loci), " reported loci...")
+  message("Maximum distance threshold: ", format(max_distance, big.mark = ","), " bp")
   
   # Create GRanges objects
   merged_gr <- GenomicRanges::GRanges(
@@ -70,7 +73,12 @@ refine_with_reported <- function(merged_loci,
     ranges = IRanges::IRanges(start = reported_loci$START, end = reported_loci$END)
   )
   
-  # Find overlaps
+  # Find overlaps with distance threshold
+  if (max_distance > 0) {
+    overlaps <- GenomicRanges::findOverlaps(merged_gr, reported_gr, maxgap = max_distance)
+  } else {
+    overlaps <- GenomicRanges::findOverlaps(merged_gr, reported_gr)
+  }
   overlaps <- GenomicRanges::findOverlaps(merged_gr, reported_gr)
   
   message("Found ", length(unique(S4Vectors::queryHits(overlaps))), 
@@ -122,29 +130,20 @@ refine_with_reported <- function(merged_loci,
     
     # Create refined loci based on reported guides
     for (j in seq_len(nrow(overlapping_reported))) {
+      merged_start <- merged_loci$START[i]
+      merged_end <- merged_loci$END[i]
+      reported_start <- overlapping_reported$START[j]
+      reported_end <- overlapping_reported$END[j]
       
-      # Use reported locus boundaries, expanded only to include overlap with merged
-      # Take the minimum start between reported and merged START
-      refined_start <- min(overlapping_reported$START[j], merged_loci$START[i])
-      # Take the maximum end between reported and merged END  
-      refined_end <- max(overlapping_reported$END[j], merged_loci$END[i])
-      
-      # Constrain to the merged region boundaries (don't extend beyond merged)
-      refined_start <- max(refined_start, merged_loci$START[i])
-      refined_end <- min(refined_end, merged_loci$END[i])
-      
-      # Actually, use the reported boundaries as-is if they're within merged
-      # Otherwise clip them to merged boundaries
-      if (overlapping_reported$START[j] >= merged_loci$START[i] && 
-          overlapping_reported$END[j] <= merged_loci$END[i]) {
-        # Reported is fully within merged - use reported boundaries
-        refined_start <- overlapping_reported$START[j]
-        refined_end <- overlapping_reported$END[j]
+      if (reported_start >= merged_start && reported_end <= merged_end) {
+        # Reported locus is fully within merged region
+        refined_start <- reported_start
+        refined_end <- reported_end
         ref_type <- if (nrow(overlapping_reported) > 1) "split" else "aligned"
       } else {
-        # Reported extends beyond merged - take the overlap region
-        refined_start <- max(overlapping_reported$START[j], merged_loci$START[i])
-        refined_end <- min(overlapping_reported$END[j], merged_loci$END[i])
+        # Reported locus extends beyond merged boundaries or is nearby within max_distance
+        refined_start <- min(merged_start, reported_start)
+        refined_end <- max(merged_end, reported_end)
         ref_type <- "expanded"
       }
       
