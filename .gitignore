@@ -27,3 +27,7 @@ inputs/
 *.rds
 *.RData
 *.svg
+*.bim
+*.bed
+*.fam
+*.log

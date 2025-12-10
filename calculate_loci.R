@@ -59,16 +59,48 @@ setnames(bim, c("chr","rsid","cm","bp","a1","a2"))
 gwas <- fread(opt$gwas)
 # Normalize column names: try to find required columns
 # Common columns: chr, bp (pos), p, rsID, a1, a2
-colnames(gwas) <- tolower(colnames(gwas))
-if (!("chr" %in% colnames(gwas) && ("bp" %in% colnames(gwas) || "pos" %in% colnames(gwas)))) {
-  stop("GWAS file must contain 'chr' and 'bp' or 'pos' columns")
+colnames(gwas) <- gsub("\ufeff", "", colnames(gwas), fixed = TRUE)
+colnames(gwas) <- trimws(tolower(colnames(gwas)))
+
+normalize_col <- function(dt, candidates, target) {
+  hits <- intersect(trimws(tolower(candidates)), colnames(dt))
+  if (!length(hits)) return(FALSE)
+  hit <- hits[1]
+  if (hit != target) setnames(dt, hit, target)
+  TRUE
 }
-if ("pos" %in% colnames(gwas)) setnames(gwas, "pos", "bp")
+
+if (!normalize_col(gwas, c("chr","chrom","chromosome"), "chr")) {
+  stop("GWAS file must contain a chromosome column (chr/chrom/chromosome)")
+}
+if (!normalize_col(gwas, c("bp","pos","position","bp_hg19"), "bp")) {
+  stop("GWAS file must contain a base-pair position column (bp/pos/position)")
+}
+if (!normalize_col(gwas, c("p","pval","pvalue"), "p")) {
+  stop("GWAS file must contain a P-value column (p/pval/pvalue)")
+}
+normalize_col(gwas, c("a1","allele1","effect_allele","ea"), "a1")
+normalize_col(gwas, c("a2","allele2","other_allele","oa"), "a2")
+
 # attempt to find rsid column
-rs_col <- intersect(c("rsid","snp","rs_id","id"), colnames(gwas))
-if (length(rs_col)==0) stop("GWAS file must contain an rsID column (rsid/snp/id)")
+rs_col <- intersect(c("rsid","snp","rs_id","id","markername"), colnames(gwas))
+if (!length(rs_col)) stop("GWAS file must contain an rsID column (rsid/snp/id/markername)")
 rs_col <- rs_col[1]
-if (!("p" %in% colnames(gwas))) stop("GWAS file must contain 'p' column")
+
+# sanitize values
+gwas[, chr := gsub("^chr", "", chr, ignore.case = TRUE)]
+gwas[, chr := fifelse(chr %in% c("x","y","mt","m"), toupper(chr), chr)]
+supp_chr <- suppressWarnings(as.integer(chr))
+gwas[, chr := ifelse(is.na(supp_chr), chr, supp_chr)]
+gwas[, bp := suppressWarnings(as.integer(bp))]
+if (anyNA(gwas$bp)) {
+  stop("Some GWAS bp values are missing or non-integer after coercion")
+}
+gwas[, p := as.numeric(p)]
+if (anyNA(gwas$p)) {
+  stop("Some GWAS P-values are missing or non-numeric after coercion")
+}
+
 # ensure sorted by chr and pos
 setkeyv(gwas, c("chr","bp"))
 
@@ -131,6 +163,7 @@ plink_ld_snps <- function(rsid, window_kb, r2cut) {
 
 # MAIN per-chromosome processing
 chroms <- unique(gwas$chr)
+chroms <- chroms[order(suppressWarnings(as.integer(chroms)), chroms)]
 gidx <- 0
 IndSigIdx <- 0
 leadIdx <- 0
@@ -367,21 +400,32 @@ for (chrom in chroms) {
     top_uid <- comp_inds$ind_uid[top_i]
     top_rs <- comp_inds$rsID[top_i]
     top_p <- comp_inds$p[top_i]
+    top_pos <- comp_inds$pos[top_i]
     # collect all IndSig rsIDs in this lead
     inds_rs <- paste(comp_inds$rsID, collapse = ";")
     nInd <- nrow(comp_inds)
     # collect candidate SNPs that have topLead == any of these ind rsIDs
     cands <- chrom_candidates[topLead %in% comp_inds$rsID]
     # compute start/end
-    start_pos <- min(cands$bp, na.rm = TRUE)
-    end_pos <- max(cands$bp, na.rm = TRUE)
+    start_pos <- suppressWarnings(min(cands$bp, na.rm = TRUE))
+    end_pos <- suppressWarnings(max(cands$bp, na.rm = TRUE))
+    if (!is.finite(start_pos)) {
+      start_pos <- NA_integer_
+    } else {
+      start_pos <- as.integer(start_pos)
+    }
+    if (!is.finite(end_pos)) {
+      end_pos <- NA_integer_
+    } else {
+      end_pos <- as.integer(end_pos)
+    }
     nSNPs <- length(unique(cands$uid))
     nGWASSNPs <- sum(!is.na(cands$gwasP))
     lead_entry <- data.table(
       lead_uid = top_uid,
       lead_rsID = top_rs,
       chr = chrom,
-      pos = top_p, # store p in pos column? store p separately below
+      pos = top_pos,
       p = top_p,
       nIndSigSNPs = nInd,
       IndSigSNPs = inds_rs,
