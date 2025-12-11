@@ -1,37 +1,36 @@
 #' Align Merged Loci Using Reported Loci
 #'
-#' Aligns merged loci with previously reported loci without altering locus boundaries
-#' through splitting or expansion. For each merged locus the function records the
-#' reported loci that overlap (or fall within a specified proximity) and returns a
-#' single aligned summary row.
+#' Aligns merged loci with previously reported loci without altering boundaries.
+#' For each merged locus the function records overlapping (or nearby) reported
+#' loci and preserves the original merged interval. No splitting or extension of
+#' merged loci is performed.
 #'
-#' @param merged_loci data.frame with merged loci (output from merge_fuma_loci).
-#'        Must contain columns `CHR`, `START`, `END`, and `MERGED_LOCUS_ID`.
+#' @param merged_loci data.frame produced by merge_fuma_loci(). Must contain
+#'        columns `CHR`, `START`, `END`, and `MERGED_LOCUS_ID`.
 #' @param reported_loci data.frame or list of ReportedLoci objects. Must contain
 #'        columns `CHR`, `START`, `END`, and `LOCUS`.
 #' @param max_distance integer. Maximum distance (bp) to consider a reported locus
 #'        as aligned with a merged locus. Default: 0 (direct overlaps only).
-#' @param keep_unmatched logical, whether to keep merged loci that have no aligned
-#'        reported loci. Default: TRUE.
+#' @param keep_unmatched logical. Keep merged loci with no nearby reported loci.
+#'        Default: TRUE.
 #'
 #' @return data.frame with class `AlignedLoci`. Each row corresponds to a merged
-#'         locus and includes alignment metadata:
+#'         locus paired with either an aligned/proximal reported locus or an
+#'         unmatched record when no reported loci were found. Columns include:
 #'   - ALIGNED_LOCUS_ID: Row identifier
-#'   - CHR: Chromosome
-#'   - MERGED_START / MERGED_END / MERGED_WIDTH: Original merged boundaries
-#'   - ALIGNED_START / ALIGNED_END / ALIGNED_WIDTH: Overlap range if available
-#'   - REPORTED_START / REPORTED_END / REPORTED_LOCI / REPORTED_SOURCE: Reported summary
-#'   - ALIGNMENT_STATUS: `aligned`, `proximal`, or `unmatched`
-#'   - N_MATCHED_REPORTED: Number of reported loci associated with the merged locus
-#'   - DISTANCE_TO_REPORTED: Minimum distance to a reported locus when proximal
-#'   - MERGED_LOCUS_ID, N_ORIGINAL_LOCI, ORIGINAL_LOCI, SOURCES: Carried metadata
+#'   - ROW_TYPE: `aligned`, `proximal`, or `unmatched`
+#'   - CHR, START, END, WIDTH: Reported locus coordinates (or NA when unmatched)
+#'   - MERGED_LOCUS_ID, MERGED_START, MERGED_END, MERGED_WIDTH: Original merge
+#'   - REPORTED_LOCUS, REPORTED_SOURCE: Reported locus metadata
+#'   - ALIGNMENT_STATUS: Same as ROW_TYPE for convenience
+#'   - DISTANCE_TO_MERGED: Gap distance when proximal (bp)
+#'   - N_ORIGINAL_LOCI, ORIGINAL_LOCI, SOURCES: Metadata inherited from merge
 #'
 #' @export
 align_with_reported <- function(merged_loci,
                                 reported_loci,
                                 max_distance = 0,
                                 keep_unmatched = TRUE) {
-  # Dependency checks (required for interval arithmetic)
   if (!requireNamespace("GenomicRanges", quietly = TRUE)) {
     stop("GenomicRanges package is required. Install with: BiocManager::install('GenomicRanges')")
   }
@@ -39,17 +38,17 @@ align_with_reported <- function(merged_loci,
     stop("IRanges package is required. Install with: BiocManager::install('IRanges')")
   }
 
-  # Helper to safely extract column values
-  get_col_value <- function(df, row_idx, col_name, default = NA) {
+  # Helper to safely access optional columns
+  fetch_col <- function(df, idx, col_name, default = NA) {
     if (col_name %in% colnames(df)) {
-      return(df[[col_name]][row_idx])
+      return(df[[col_name]][idx])
     }
     default
   }
 
-  # Handle list input of reported loci (combine)
+  # Combine list input of reported loci
   if (is.list(reported_loci) && !is.data.frame(reported_loci)) {
-    message("Combining ", length(reported_loci), " reported loci sources ...")
+    message("Combining ", length(reported_loci), " reported loci sources...")
     reported_loci <- do.call(rbind, lapply(reported_loci, function(x) {
       if (!is.data.frame(x)) {
         stop("All elements in reported_loci list must be data frames")
@@ -58,7 +57,6 @@ align_with_reported <- function(merged_loci,
     }))
   }
 
-  # Validate inputs
   required_merged <- c("CHR", "START", "END", "MERGED_LOCUS_ID")
   required_reported <- c("CHR", "START", "END", "LOCUS")
 
@@ -66,147 +64,169 @@ align_with_reported <- function(merged_loci,
     stop("merged_loci missing required columns: ",
          paste(setdiff(required_merged, colnames(merged_loci)), collapse = ", "))
   }
-  if (!all(required_reported %in% colnames(reported_loci))) {
+  if (nrow(reported_loci) > 0 && !all(required_reported %in% colnames(reported_loci))) {
     stop("reported_loci missing required columns: ",
          paste(setdiff(required_reported, colnames(reported_loci)), collapse = ", "))
   }
 
+  merged_loci <- as.data.frame(merged_loci, stringsAsFactors = FALSE)
+  reported_loci <- as.data.frame(reported_loci, stringsAsFactors = FALSE)
+
   merged_loci$CHR <- as.character(merged_loci$CHR)
-  reported_loci$CHR <- as.character(reported_loci$CHR)
+  merged_loci$START <- as.numeric(merged_loci$START)
+  merged_loci$END <- as.numeric(merged_loci$END)
+  if (!"WIDTH" %in% colnames(merged_loci)) {
+    merged_loci$WIDTH <- merged_loci$END - merged_loci$START + 1
+  }
+
+  if (nrow(reported_loci) > 0) {
+    reported_loci$CHR <- as.character(reported_loci$CHR)
+    reported_loci$START <- as.numeric(reported_loci$START)
+    reported_loci$END <- as.numeric(reported_loci$END)
+  }
 
   message("Aligning ", nrow(merged_loci), " merged loci with ",
           nrow(reported_loci), " reported loci ...")
   message("Maximum distance threshold: ", format(max_distance, big.mark = ","), " bp")
 
-  # Construct GRanges
   merged_gr <- GenomicRanges::GRanges(
     seqnames = merged_loci$CHR,
     ranges = IRanges::IRanges(start = merged_loci$START, end = merged_loci$END)
   )
-  reported_gr <- GenomicRanges::GRanges(
-    seqnames = reported_loci$CHR,
-    ranges = IRanges::IRanges(start = reported_loci$START, end = reported_loci$END)
-  )
 
-  overlaps <- GenomicRanges::findOverlaps(merged_gr, reported_gr, maxgap = max(0, max_distance))
+  if (nrow(reported_loci) > 0) {
+    reported_gr <- GenomicRanges::GRanges(
+      seqnames = reported_loci$CHR,
+      ranges = IRanges::IRanges(start = reported_loci$START, end = reported_loci$END)
+    )
+    overlaps <- GenomicRanges::findOverlaps(merged_gr,
+                                            reported_gr,
+                                            maxgap = max(0, max_distance))
+    query_hits <- S4Vectors::queryHits(overlaps)
+    subject_hits <- S4Vectors::subjectHits(overlaps)
+  } else {
+    query_hits <- integer(0)
+    subject_hits <- integer(0)
+  }
 
-  message("Found ", length(unique(S4Vectors::queryHits(overlaps))),
-          " merged loci with aligned or proximal reported loci")
-
-  aligned_rows <- vector("list", length = nrow(merged_loci))
-  aligned_counter <- 1L
+  aligned_rows <- list()
+  row_counter <- 1L
+  matched_flags <- rep(FALSE, nrow(merged_loci))
 
   for (i in seq_len(nrow(merged_loci))) {
-    merged_start <- merged_loci$START[i]
-    merged_end <- merged_loci$END[i]
+    merged_row <- merged_loci[i, ]
+    merged_start <- merged_row$START
+    merged_end <- merged_row$END
 
-    subject_idx <- S4Vectors::subjectHits(overlaps)[S4Vectors::queryHits(overlaps) == i]
+    if (length(query_hits) > 0) {
+      reported_idx <- subject_hits[query_hits == i]
+    } else {
+      reported_idx <- integer(0)
+    }
 
-    if (length(subject_idx) == 0) {
-      if (!keep_unmatched) {
-        next
+    if (length(reported_idx) == 0) {
+      if (keep_unmatched) {
+        aligned_rows[[row_counter]] <- data.frame(
+          ALIGNED_LOCUS_ID = paste0("ALIGNED_", row_counter),
+          ROW_TYPE = "unmatched",
+          CHR = merged_row$CHR,
+          START = NA_real_,
+          END = NA_real_,
+          WIDTH = NA_real_,
+          MERGED_LOCUS_ID = merged_row$MERGED_LOCUS_ID,
+          MERGED_START = merged_start,
+          MERGED_END = merged_end,
+          MERGED_WIDTH = merged_row$WIDTH,
+          REPORTED_LOCUS = NA_character_,
+          REPORTED_SOURCE = NA_character_,
+          ALIGNMENT_STATUS = "unmatched",
+          DISTANCE_TO_MERGED = NA_real_,
+          N_ORIGINAL_LOCI = fetch_col(merged_loci, i, "N_ORIGINAL_LOCI", NA_real_),
+          ORIGINAL_LOCI = fetch_col(merged_loci, i, "ORIGINAL_LOCI", NA_character_),
+          SOURCES = fetch_col(merged_loci, i, "SOURCES", NA_character_),
+          stringsAsFactors = FALSE
+        )
+        row_counter <- row_counter + 1L
       }
-
-      aligned_rows[[aligned_counter]] <- data.frame(
-        ALIGNED_LOCUS_ID = paste0("ALIGNED_", aligned_counter),
-        CHR = merged_loci$CHR[i],
-        MERGED_START = merged_start,
-        MERGED_END = merged_end,
-        MERGED_WIDTH = merged_end - merged_start + 1,
-        ALIGNED_START = NA_integer_,
-        ALIGNED_END = NA_integer_,
-        ALIGNED_WIDTH = NA_integer_,
-        REPORTED_START = NA_integer_,
-        REPORTED_END = NA_integer_,
-        REPORTED_LOCI = NA_character_,
-        REPORTED_SOURCE = NA_character_,
-        ALIGNMENT_STATUS = "unmatched",
-        N_MATCHED_REPORTED = 0L,
-        DISTANCE_TO_REPORTED = NA_integer_,
-        MERGED_LOCUS_ID = merged_loci$MERGED_LOCUS_ID[i],
-        N_ORIGINAL_LOCI = get_col_value(merged_loci, i, "N_ORIGINAL_LOCI", NA_integer_),
-        ORIGINAL_LOCI = get_col_value(merged_loci, i, "ORIGINAL_LOCI", NA_character_),
-        SOURCES = get_col_value(merged_loci, i, "SOURCES", NA_character_),
-        stringsAsFactors = FALSE
-      )
-      aligned_counter <- aligned_counter + 1L
       next
     }
 
-    reported_subset <- reported_loci[subject_idx, , drop = FALSE]
+    matched_flags[i] <- TRUE
 
-    reported_start <- min(reported_subset$START, na.rm = TRUE)
-    reported_end <- max(reported_subset$END, na.rm = TRUE)
+    for (idx in reported_idx) {
+      rep_row <- reported_loci[idx, , drop = FALSE]
+      rep_start <- rep_row$START
+      rep_end <- rep_row$END
+      rep_width <- if (is.finite(rep_start) && is.finite(rep_end)) rep_end - rep_start + 1 else NA_real_
 
-    overlap_start <- max(merged_start, reported_start)
-    overlap_end <- min(merged_end, reported_end)
-    overlap_width <- overlap_end - overlap_start + 1
+      overlap_start <- max(merged_start, rep_start, na.rm = TRUE)
+      overlap_end <- min(merged_end, rep_end, na.rm = TRUE)
+      overlap_width <- overlap_end - overlap_start + 1
 
-    if (overlap_width > 0) {
-      alignment_status <- "aligned"
-      aligned_start <- overlap_start
-      aligned_end <- overlap_end
-      aligned_width <- overlap_width
-      distance_to_reported <- 0L
-    } else {
-      alignment_status <- "proximal"
-      aligned_start <- NA_integer_
-      aligned_end <- NA_integer_
-      aligned_width <- NA_integer_
+      has_overlap <- is.finite(overlap_width) && overlap_width > 0
+      row_type <- if (has_overlap) "aligned" else "proximal"
 
-      # Compute minimum gap between merged locus and reported loci
-      gaps_left <- merged_start - reported_subset$END
-      gaps_left <- gaps_left[gaps_left > 0]
-      gaps_right <- reported_subset$START - merged_end
-      gaps_right <- gaps_right[gaps_right > 0]
-      candidate_gaps <- c(gaps_left, gaps_right)
-      distance_to_reported <- if (length(candidate_gaps) == 0) 0L else min(candidate_gaps)
+      if (has_overlap) {
+        distance_to_merged <- 0
+      } else {
+        if (!is.finite(rep_start) || !is.finite(rep_end)) {
+          distance_to_merged <- NA_real_
+        } else if (rep_end < merged_start) {
+          distance_to_merged <- merged_start - rep_end
+        } else if (rep_start > merged_end) {
+          distance_to_merged <- rep_start - merged_end
+        } else {
+          distance_to_merged <- 0
+        }
+      }
+
+      reported_source <- if ("SOURCE_FILE" %in% colnames(rep_row)) {
+        rep_row$SOURCE_FILE
+      } else if ("SOURCE" %in% colnames(rep_row)) {
+        rep_row$SOURCE
+      } else {
+        NA_character_
+      }
+
+      aligned_rows[[row_counter]] <- data.frame(
+        ALIGNED_LOCUS_ID = paste0("ALIGNED_", row_counter),
+        ROW_TYPE = row_type,
+        CHR = merged_row$CHR,
+        START = rep_start,
+        END = rep_end,
+        WIDTH = rep_width,
+        MERGED_LOCUS_ID = merged_row$MERGED_LOCUS_ID,
+        MERGED_START = merged_start,
+        MERGED_END = merged_end,
+        MERGED_WIDTH = merged_row$WIDTH,
+        REPORTED_LOCUS = rep_row$LOCUS,
+        REPORTED_SOURCE = reported_source,
+        ALIGNMENT_STATUS = row_type,
+        DISTANCE_TO_MERGED = distance_to_merged,
+        N_ORIGINAL_LOCI = fetch_col(merged_loci, i, "N_ORIGINAL_LOCI", NA_real_),
+        ORIGINAL_LOCI = fetch_col(merged_loci, i, "ORIGINAL_LOCI", NA_character_),
+        SOURCES = fetch_col(merged_loci, i, "SOURCES", NA_character_),
+        stringsAsFactors = FALSE
+      )
+      row_counter <- row_counter + 1L
     }
-
-    reported_names <- paste(unique(reported_subset$LOCUS), collapse = ";")
-    reported_sources <- if ("SOURCE_FILE" %in% colnames(reported_subset)) {
-      paste(unique(reported_subset$SOURCE_FILE), collapse = ";")
-    } else {
-      NA_character_
-    }
-
-    aligned_rows[[aligned_counter]] <- data.frame(
-      ALIGNED_LOCUS_ID = paste0("ALIGNED_", aligned_counter),
-      CHR = merged_loci$CHR[i],
-      MERGED_START = merged_start,
-      MERGED_END = merged_end,
-      MERGED_WIDTH = merged_end - merged_start + 1,
-      ALIGNED_START = aligned_start,
-      ALIGNED_END = aligned_end,
-      ALIGNED_WIDTH = aligned_width,
-      REPORTED_START = reported_start,
-      REPORTED_END = reported_end,
-      REPORTED_LOCI = reported_names,
-      REPORTED_SOURCE = reported_sources,
-      ALIGNMENT_STATUS = alignment_status,
-      N_MATCHED_REPORTED = nrow(reported_subset),
-      DISTANCE_TO_REPORTED = distance_to_reported,
-      MERGED_LOCUS_ID = merged_loci$MERGED_LOCUS_ID[i],
-      N_ORIGINAL_LOCI = get_col_value(merged_loci, i, "N_ORIGINAL_LOCI", NA_integer_),
-      ORIGINAL_LOCI = get_col_value(merged_loci, i, "ORIGINAL_LOCI", NA_character_),
-      SOURCES = get_col_value(merged_loci, i, "SOURCES", NA_character_),
-      stringsAsFactors = FALSE
-    )
-
-    aligned_counter <- aligned_counter + 1L
   }
 
-  aligned_rows <- aligned_rows[seq_len(aligned_counter - 1L)]
   if (length(aligned_rows) == 0) {
-    message("No aligned loci returned (keep_unmatched = FALSE and no matches found)")
+    message("No aligned loci returned (keep_unmatched = FALSE and no reported loci matched)")
     return(data.frame())
   }
 
   aligned_result <- do.call(rbind, aligned_rows)
+  aligned_result$ROW_TYPE <- as.character(aligned_result$ROW_TYPE)
+  aligned_result$ALIGNMENT_STATUS <- as.character(aligned_result$ALIGNMENT_STATUS)
+  aligned_result$MERGED_LOCUS_ID <- as.character(aligned_result$MERGED_LOCUS_ID)
+
   class(aligned_result) <- c("AlignedLoci", "data.frame")
 
   message("\n=== Alignment Summary ===")
-  message("Total aligned loci: ", nrow(aligned_result))
+  message("Merged loci considered: ", nrow(merged_loci))
+  message("Merged loci with reported matches: ", sum(matched_flags))
   status_counts <- table(aligned_result$ALIGNMENT_STATUS, useNA = "ifany")
   for (status in names(status_counts)) {
     message("  - ", status, ": ", status_counts[[status]])
@@ -224,16 +244,18 @@ align_with_reported <- function(merged_loci,
 print.AlignedLoci <- function(x, ...) {
   cat("Aligned Loci Data\n")
   cat("=================\n")
-  cat("Number of loci:", nrow(x), "\n")
-  cat("Chromosomes:", length(unique(x$CHR)), "unique\n")
-  cat("Alignment statuses:\n")
+  cat("Rows:", nrow(x), "\n")
+  cat("Unique merged loci:", length(unique(x$MERGED_LOCUS_ID)), "\n")
+  cat("Chromosomes:", length(unique(x$CHR)), "\n")
+
   status_counts <- table(x$ALIGNMENT_STATUS, useNA = "ifany")
+  cat("Alignment statuses:\n")
   for (status in names(status_counts)) {
     cat("  - ", status, ": ", status_counts[[status]], "\n", sep = "")
   }
 
   cat("\nColumns:", paste(colnames(x), collapse = ", "), "\n")
-  cat("\nFirst few loci:\n")
+  cat("\nFirst few rows:\n")
   print.data.frame(head(x, 10))
 
   invisible(x)
@@ -248,7 +270,8 @@ print.AlignedLoci <- function(x, ...) {
 summary.AlignedLoci <- function(object, ...) {
   cat("Aligned Loci Summary\n")
   cat("=====================\n")
-  cat("Total loci:", nrow(object), "\n")
+  cat("Rows:", nrow(object), "\n")
+  cat("Unique merged loci:", length(unique(object$MERGED_LOCUS_ID)), "\n")
   cat("Chromosomes:", paste(sort(unique(object$CHR)), collapse = ", "), "\n")
 
   status_counts <- table(object$ALIGNMENT_STATUS, useNA = "ifany")
@@ -258,22 +281,22 @@ summary.AlignedLoci <- function(object, ...) {
         round(100 * status_counts[[status]] / nrow(object), 1), "%)\n", sep = "")
   }
 
-  aligned_rows <- object$ALIGNMENT_STATUS == "aligned" & !is.na(object$ALIGNED_WIDTH)
+  aligned_rows <- object$ALIGNMENT_STATUS == "aligned" & is.finite(object$WIDTH)
   if (any(aligned_rows)) {
-    cat("\nAligned overlap width (bp):\n")
-    cat("  Min:", min(object$ALIGNED_WIDTH[aligned_rows], na.rm = TRUE), "\n")
-    cat("  Mean:", round(mean(object$ALIGNED_WIDTH[aligned_rows], na.rm = TRUE), 2), "\n")
-    cat("  Median:", median(object$ALIGNED_WIDTH[aligned_rows], na.rm = TRUE), "\n")
-    cat("  Max:", max(object$ALIGNED_WIDTH[aligned_rows], na.rm = TRUE), "\n")
+    cat("\nAligned reported widths (bp):\n")
+    cat("  Min:", min(object$WIDTH[aligned_rows], na.rm = TRUE), "\n")
+    cat("  Mean:", round(mean(object$WIDTH[aligned_rows], na.rm = TRUE), 2), "\n")
+    cat("  Median:", stats::median(object$WIDTH[aligned_rows], na.rm = TRUE), "\n")
+    cat("  Max:", max(object$WIDTH[aligned_rows], na.rm = TRUE), "\n")
   }
 
-  proximal_rows <- object$ALIGNMENT_STATUS == "proximal"
+  proximal_rows <- object$ALIGNMENT_STATUS == "proximal" & is.finite(object$DISTANCE_TO_MERGED)
   if (any(proximal_rows)) {
-    cat("\nProximal distance to reported loci (bp):\n")
-    cat("  Min:", min(object$DISTANCE_TO_REPORTED[proximal_rows], na.rm = TRUE), "\n")
-    cat("  Mean:", round(mean(object$DISTANCE_TO_REPORTED[proximal_rows], na.rm = TRUE), 2), "\n")
-    cat("  Median:", median(object$DISTANCE_TO_REPORTED[proximal_rows], na.rm = TRUE), "\n")
-    cat("  Max:", max(object$DISTANCE_TO_REPORTED[proximal_rows], na.rm = TRUE), "\n")
+    cat("\nProximal distances (bp):\n")
+    cat("  Min:", min(object$DISTANCE_TO_MERGED[proximal_rows], na.rm = TRUE), "\n")
+    cat("  Mean:", round(mean(object$DISTANCE_TO_MERGED[proximal_rows], na.rm = TRUE), 2), "\n")
+    cat("  Median:", stats::median(object$DISTANCE_TO_MERGED[proximal_rows], na.rm = TRUE), "\n")
+    cat("  Max:", max(object$DISTANCE_TO_MERGED[proximal_rows], na.rm = TRUE), "\n")
   }
 
   invisible(object)
