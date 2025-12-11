@@ -29,6 +29,7 @@ option_list <- list(
   make_option(c("--maf"), type="double", default=0.01, help="Minimum MAF in reference panel"),
   make_option(c("--refSNPs"), type="integer", default=1, help="1 to include reference-only SNPs, 0 to exclude"),
   make_option(c("--windowKb"), type="integer", default=500, help="Max window (kb) to ask PLINK for LD around a SNP (practical cap)"),
+  make_option(c("--threads"), type="integer", default=8, help="Number of threads to pass to PLINK"),
   make_option(c("--plink"), type="character", default="plink", help="PLINK command (default 'plink')")
 )
 
@@ -37,12 +38,20 @@ opt <- parse_args(OptionParser(option_list=option_list))
 # Create outdir
 dir.create(opt$outdir, showWarnings = FALSE, recursive = TRUE)
 
+plink_threads_arg <- function() {
+  if (!is.null(opt$threads) && opt$threads > 1) {
+    sprintf(" --threads %d", opt$threads)
+  } else {
+    ""
+  }
+}
+
 # Helper: run plink --freq to make frequency file (if not present)
 freq_prefix <- file.path(opt$outdir, "ref_freq")
 freq_file <- paste0(freq_prefix, ".frq")
 if (!file.exists(freq_file)) {
   message("Computing reference MAF with PLINK ...")
-  cmd <- sprintf("%s --bfile %s --freq --out %s", opt$plink, opt$bfile, freq_prefix)
+  cmd <- sprintf("%s --bfile %s%s --freq --out %s", opt$plink, opt$bfile, plink_threads_arg(), freq_prefix)
   system(cmd, intern = TRUE)
   if (!file.exists(freq_file)) stop("PLINK frequency file not created; check PLINK and bfile")
 }
@@ -54,6 +63,21 @@ bim_path <- paste0(opt$bfile, ".bim")
 if (!file.exists(bim_path)) stop("Reference .bim not found")
 bim <- fread(bim_path, header = FALSE)
 setnames(bim, c("chr","rsid","cm","bp","a1","a2"))
+
+# Identify duplicate rsIDs in the reference; PLINK cannot process them in LD mode
+dup_rsids <- unique(bim$rsid[duplicated(bim$rsid)])
+if (length(dup_rsids)) {
+  message(sprintf("Reference panel has %d duplicated rsIDs; excluding them from LD queries", length(dup_rsids)))
+}
+valid_bim <- bim[!duplicated(rsid)]
+if (length(dup_rsids)) {
+  valid_bim <- valid_bim[!(rsid %in% dup_rsids)]
+}
+
+# Build a quick index: map rsid -> chr, pos, alleles (only unique IDs)
+bim_index <- data.table(rsid = valid_bim$rsid, chr = valid_bim$chr, bp = valid_bim$bp, a1 = valid_bim$a1, a2 = valid_bim$a2)
+setkey(bim_index, rsid)
+valid_rsids <- bim_index$rsid
 
 # Read GWAS summary file
 gwas <- fread(opt$gwas)
@@ -87,11 +111,33 @@ rs_col <- intersect(c("rsid","snp","rs_id","id","markername"), colnames(gwas))
 if (!length(rs_col)) stop("GWAS file must contain an rsID column (rsid/snp/id/markername)")
 rs_col <- rs_col[1]
 
+message("Detected GWAS columns: ", paste(colnames(gwas), collapse = ", "))
+
+original_rs_col <- rs_col
+rsid_cols <- unique(c(original_rs_col, "markername", "snp", "rsid", "id", "variant_id", "variant"))
+rsid_cols <- rsid_cols[rsid_cols %in% colnames(gwas)]
+gwas[, rsid_match := NA_character_]
+for (col in rsid_cols) {
+  vals <- trimws(as.character(gwas[[col]]))
+  vals[vals == ""] <- NA_character_
+  idx <- which(is.na(gwas$rsid_match) & !is.na(vals))
+  if (length(idx)) set(gwas, i = idx, j = "rsid_match", value = vals[idx])
+}
+gwas[rsid_match == "", rsid_match := NA_character_]
+if (!any(!is.na(gwas$rsid_match))) {
+  stop("Unable to determine rsIDs from GWAS columns; please supply rsid/snp/markername data")
+}
+rs_col <- "rsid_match"
+rsid_candidate_cols <- unique(c("rsid_match", rsid_cols))
+
 # sanitize values
-gwas[, chr := gsub("^chr", "", chr, ignore.case = TRUE)]
-gwas[, chr := fifelse(chr %in% c("x","y","mt","m"), toupper(chr), chr)]
-supp_chr <- suppressWarnings(as.integer(chr))
-gwas[, chr := ifelse(is.na(supp_chr), chr, supp_chr)]
+chr_vec <- gwas[["chr"]]
+chr_vec <- gsub("^chr", "", chr_vec, ignore.case = TRUE)
+special_idx <- chr_vec %in% c("x","y","mt","m")
+chr_vec[special_idx] <- toupper(chr_vec[special_idx])
+supp_chr <- suppressWarnings(as.integer(chr_vec))
+chr_vec <- ifelse(is.na(supp_chr), chr_vec, as.character(supp_chr))
+gwas[, chr := chr_vec]
 gwas[, bp := suppressWarnings(as.integer(bp))]
 if (anyNA(gwas$bp)) {
   stop("Some GWAS bp values are missing or non-integer after coercion")
@@ -100,6 +146,17 @@ gwas[, p := as.numeric(p)]
 if (anyNA(gwas$p)) {
   stop("Some GWAS P-values are missing or non-numeric after coercion")
 }
+
+gwas[, resolved_rs := ifelse(rsid_match %chin% valid_rsids, rsid_match, NA_character_)]
+matched_count <- sum(!is.na(gwas$resolved_rs))
+total_rows <- nrow(gwas)
+if (matched_count == 0) {
+  stop("None of the GWAS SNP IDs were found in the reference BIM file")
+}
+if (matched_count < nrow(gwas)) {
+  message(sprintf("Retaining %d GWAS rows that match the reference (dropping %d unmatched)", matched_count, total_rows - matched_count))
+}
+gwas <- gwas[!is.na(resolved_rs)]
 
 # ensure sorted by chr and pos
 setkeyv(gwas, c("chr","bp"))
@@ -111,10 +168,6 @@ lookup_maf <- function(rsid, pos, chr) {
   # try bim (no MAF in bim) -> NA
   return(NA_real_)
 }
-
-# Build a quick index: map rsid -> chr,pos
-bim_index <- data.table(rsid=bim$rsid, chr=bim$chr, bp=bim$bp, a1=bim$a1, a2=bim$a2)
-setkey(bim_index, rsid)
 
 # Containers for outputs
 ld_rows <- list()
@@ -132,30 +185,59 @@ make_uid <- function(chr, pos, a1, a2) {
   paste0(chr, ":", pos, ":", alleles[1], ":", alleles[2])
 }
 
-# Helper to call plink --ld-snp for a single SNP
-# returns data.table with columns: SNP_A, BP_A, SNP_B, BP_B, R2
-plink_ld_snps <- function(rsid, window_kb, r2cut) {
-  # tmp prefix
-  tmp_pref <- tempfile(pattern = "plink_ld_")
-  # build command
-  # Using --ld-snp to get pairs of SNPs with given r2 threshold in window
-  cmd <- sprintf("%s --bfile %s --ld-snp %s --ld-window-kb %d --ld-window-r2 %g --out %s",
-                 opt$plink, opt$bfile, rsid, window_kb, r2cut, tmp_pref)
-  # run
-  system(cmd, intern = TRUE)
+get_candidate_ids <- function(row_dt) {
+  ids <- character()
+  if ("resolved_rs" %in% colnames(row_dt)) {
+    ids <- c(ids, as.character(row_dt[["resolved_rs"]]))
+  }
+  for (col in rsid_candidate_cols) {
+    if (!col %in% colnames(row_dt)) next
+    val <- as.character(row_dt[[col]])
+    ids <- c(ids, val)
+  }
+  ids <- trimws(ids)
+  ids[ids == ""] <- NA_character_
+  ids <- ids[!is.na(ids)]
+  unique(ids)
+}
+
+# Helper to call plink --ld-snp-list for a set of SNPs (batch LD)
+# Returns data.table with columns: SNP_A, BP_A, SNP_B, BP_B, R2
+plink_ld_multi <- function(rsids, window_kb, r2cut) {
+  rsids <- unique(rsids)
+  rsids <- rsids[!is.na(rsids)]
+  if (!length(rsids)) return(data.table())
+  tmp_pref <- tempfile(pattern = "plink_ld_batch_")
+  snp_list <- paste0(tmp_pref, ".snplist")
+  fwrite(data.table(rsids), snp_list, col.names = FALSE)
+  cmd <- sprintf("%s --bfile %s%s --ld-snp-list %s --ld-window-kb %d --ld-window-r2 %g --r2 --out %s",
+                 opt$plink, opt$bfile, plink_threads_arg(), snp_list, window_kb, r2cut, tmp_pref)
+  plink_out <- tryCatch(system(cmd, intern = TRUE), warning = function(w) w, error = function(e) e)
+  if (inherits(plink_out, c("warning","error"))) {
+    warning(sprintf("PLINK batch LD command failed: %s", conditionMessage(plink_out)))
+    unlink(Sys.glob(paste0(tmp_pref, "*")), recursive = TRUE, force = TRUE)
+    return(data.table())
+  }
   ldfile <- paste0(tmp_pref, ".ld")
   if (!file.exists(ldfile)) {
-    # plink may output no pairs (create empty), return empty dt
+    unlink(Sys.glob(paste0(tmp_pref, "*")), recursive = TRUE, force = TRUE)
     return(data.table())
   }
   ld <- tryCatch(fread(ldfile), error = function(e) data.table())
-  # plink's .ld has columns: SNP_A, BP_A, SNP_B, BP_B, R2 (older versions might differ)
-  # Keep at least those columns
   keep <- intersect(c("SNP_A","BP_A","SNP_B","BP_B","R2"), colnames(ld))
   if (nrow(ld) == 0 || length(keep) < 5) {
+    unlink(Sys.glob(paste0(tmp_pref, "*")), recursive = TRUE, force = TRUE)
     return(data.table())
   }
-  return(ld[, .(SNP_A, BP_A, SNP_B, BP_B, R2)])
+  ld <- ld[, .(SNP_A, BP_A, SNP_B, BP_B, R2)]
+  unlink(Sys.glob(paste0(tmp_pref, "*")), recursive = TRUE, force = TRUE)
+  ld
+}
+
+plink_ld_snps <- function(rsid, window_kb, r2cut) {
+  ld <- plink_ld_multi(rsid, window_kb, r2cut)
+  if (!nrow(ld)) return(ld)
+  ld[SNP_A == rsid | SNP_B == rsid]
 }
 
 # For performance, define a max window in kb (opt$windowKb). Python code used dynamic window size per LD region,
@@ -178,11 +260,33 @@ for (chrom in chroms) {
   # Identify candidate independent significant SNPs by scanning ordered by P
   # Sort by p ascending
   gwas_ord <- gwas_chr[order(p, bp)]
+  lead_rsids_chr <- unique(gwas_ord[p < opt$leadP, resolved_rs])
+  lead_rsids_chr <- lead_rsids_chr[!is.na(lead_rsids_chr)]
+  ld_pool <- plink_ld_multi(lead_rsids_chr, opt$windowKb, opt$r2)
+  ld_expanded <- data.table(lead = character(), lead_bp = integer(), partner = character(), partner_bp = integer(), R2 = numeric())
+  if (nrow(ld_pool) > 0) {
+    ld_expanded <- rbind(
+      ld_pool[, .(lead = SNP_A, lead_bp = BP_A, partner = SNP_B, partner_bp = BP_B, R2)],
+      ld_pool[, .(lead = SNP_B, lead_bp = BP_B, partner = SNP_A, partner_bp = BP_A, R2)]
+    )
+    ld_expanded <- unique(ld_expanded, by = c("lead","partner"))
+  }
+  setkey(ld_expanded, lead)
   # iterate SNPs with p < leadP
   candidate_inds <- list()
   for (i in seq_len(nrow(gwas_ord))) {
     row <- gwas_ord[i]
     if (is.na(row$p) || row$p >= opt$leadP) break
+    lead_ids <- get_candidate_ids(row)
+    lead_hits <- lead_ids[lead_ids %chin% bim_index$rsid]
+    if (!length(lead_hits)) {
+      message(sprintf("Skipping chr%s:%s (no matching SNP in reference)", row$chr, row$bp))
+      next
+    }
+    lead_rs <- lead_hits[1]
+    row_copy <- copy(row)
+    row_copy[[rs_col]] <- lead_rs
+    row_copy$resolved_rs <- lead_rs
     # make uid
     a1 <- if ("a1" %in% colnames(gwas_ord)) row$a1 else NA
     a2 <- if ("a2" %in% colnames(gwas_ord)) row$a2 else NA
@@ -190,28 +294,28 @@ for (chrom in chroms) {
     if (exists(uid, envir = assigned_uids, inherits = FALSE)) next
 
     # check MAF in reference
-    maf_ref <- lookup_maf(as.character(row[[rs_col]]), row$bp, row$chr)
+    maf_ref <- lookup_maf(lead_rs, row$bp, row$chr)
     if (!is.na(maf_ref) && maf_ref < opt$maf) {
       next
     }
     # Use plink to get LD partners within windowKb and r2
     # We pass windowKb cap; PLINK will return pairs in that window
-    ld_tab <- plink_ld_snps(as.character(row[[rs_col]]), opt$windowKb, opt$r2)
+    ld_tab <- ld_expanded[.(lead_rs)]
     if (nrow(ld_tab) == 0) {
       # no LD partners above threshold; still record singleton if desired
       # treat the SNP itself as candidate (if p < gwasP or we treat lead itself)
       candidate_list <- data.table(
         uid = uid,
-        rsID = as.character(row[[rs_col]]),
+        rsID = lead_rs,
         chr = row$chr,
         bp = row$bp,
         a1 = ifelse("a1" %in% colnames(row), as.character(row$a1), NA_character_),
         a2 = ifelse("a2" %in% colnames(row), as.character(row$a2), NA_character_),
         MAF = ifelse(is.na(maf_ref), NA_real_, maf_ref),
         gwasP = row$p,
-        topLead = as.character(row[[rs_col]])
+        topLead = lead_rs
       )
-      candidate_inds[[length(candidate_inds)+1]] <- list(ind_uid = uid, ind_row = row, candidates = candidate_list, ld_pairs = data.table())
+      candidate_inds[[length(candidate_inds)+1]] <- list(ind_uid = uid, ind_row = row_copy, resolved_rs = lead_rs, candidates = candidate_list, ld_pairs = data.table())
       # mark assigned so we don't re-use
       assign(uid, TRUE, envir = assigned_uids)
       next
@@ -220,10 +324,7 @@ for (chrom in chroms) {
     # Build partner list: from ld_tab, collect SNP_B (other SNPs) and SNP_A as needed
     # Combine SNP_A and SNP_B rows that involve our lead
     # rows where SNP_A == lead.rsID or SNP_B == lead.rsID
-    lead_rs <- as.character(row[[rs_col]])
-    partners <- ld_tab[SNP_A == lead_rs | SNP_B == lead_rs]
-    # get partner rsIDs and r2; unify to column 'partner'
-    partners[, partner := ifelse(SNP_A == lead_rs, SNP_B, SNP_A)]
+    partners <- ld_tab
     partners_vec <- unique(partners$partner)
     # Now we want to include GWAS-tagged partners with gwasP < gwasP, and optionally ref-only ones
     candidates_dt <- data.table()
@@ -231,6 +332,17 @@ for (chrom in chroms) {
       # find partner position in bim_index or in GWAS
       # first check GWAS
       gwas_match <- gwas_ord[get(rs_col) == p]
+      if (nrow(gwas_match) == 0) {
+        for (alt_col in setdiff(rsid_candidate_cols, rs_col)) {
+          if (!alt_col %in% colnames(gwas_ord)) next
+          alt_vals <- trimws(as.character(gwas_ord[[alt_col]]))
+          idx_alt <- which(alt_vals == p)
+          if (length(idx_alt)) {
+            gwas_match <- gwas_ord[idx_alt]
+            break
+          }
+        }
+      }
       if (nrow(gwas_match) > 0) {
         # choose the GWAS row - if multiple at same position, pick the one matching alleles ideally - skip detailed allele matching here
         prow <- gwas_match[1]
@@ -295,12 +407,12 @@ for (chrom in chroms) {
     # also include the lead itself as candidate (topLead)
     lead_candidate <- data.table(
       uid = uid,
-      rsID = as.character(row[[rs_col]]),
+      rsID = lead_rs,
       chr = row$chr,
       bp = row$bp,
       a1 = ifelse("a1" %in% colnames(row), as.character(row$a1), NA_character_),
       a2 = ifelse("a2" %in% colnames(row), as.character(row$a2), NA_character_),
-      MAF = ifelse(is.na(maf_ref), lookup_maf(as.character(row[[rs_col]]), row$bp, row$chr), maf_ref),
+      MAF = ifelse(is.na(maf_ref), lookup_maf(lead_rs, row$bp, row$chr), maf_ref),
       gwasP = row$p
     )
     candidates_dt <- rbind(lead_candidate, unique(candidates_dt), fill = TRUE)
@@ -311,18 +423,29 @@ for (chrom in chroms) {
     ld_pairs_dt <- data.table()
     for (j in seq_len(nrow(partners))) {
       prow <- partners[j]
-      partner_rs <- ifelse(prow$SNP_A == lead_rs, as.character(prow$SNP_B), as.character(prow$SNP_A))
-      # find partner position if in bim/GWAS
-      # attempt to get partner bp from bim_index
-      bp_partner <- ifelse(partner_rs %in% bim_index$rsid, bim_index[partner_rs]$bp, NA_integer_)
-      partner_uid <- make_uid(chrom, ifelse(is.na(bp_partner), NA, bp_partner),
-                              ifelse(partner_rs %in% bim_index$rsid, bim_index[partner_rs]$a1, NA),
-                              ifelse(partner_rs %in% bim_index$rsid, bim_index[partner_rs]$a2, NA))
+      partner_rs <- as.character(prow$partner)
+      bp_partner <- ifelse(!is.null(prow$partner_bp) && !is.na(prow$partner_bp), as.integer(prow$partner_bp), NA_integer_)
+      partner_chr <- chrom
+      partner_a1 <- NA
+      partner_a2 <- NA
+      if (partner_rs %in% bim_index$rsid) {
+        brow <- bim_index[partner_rs]
+        if (!is.null(brow$bp) && !is.na(brow$bp)) bp_partner <- as.integer(brow$bp)
+        if (!is.null(brow$chr) && !is.na(brow$chr)) partner_chr <- brow$chr
+        if (!is.null(brow$a1)) partner_a1 <- brow$a1
+        if (!is.null(brow$a2)) partner_a2 <- brow$a2
+      }
+      partner_uid <- make_uid(
+        partner_chr,
+        ifelse(is.na(bp_partner), NA, bp_partner),
+        partner_a1,
+        partner_a2
+      )
       ld_pairs_dt <- rbind(ld_pairs_dt, data.table(SNP1 = uid, SNP2 = partner_uid, R2 = as.numeric(prow$R2)), fill = TRUE)
     }
 
     # Save candidate index entry
-    candidate_inds[[length(candidate_inds) + 1]] <- list(ind_uid = uid, ind_row = row, candidates = unique(candidates_dt, by = "uid"), ld_pairs = unique(ld_pairs_dt))
+    candidate_inds[[length(candidate_inds) + 1]] <- list(ind_uid = uid, ind_row = row_copy, resolved_rs = lead_rs, candidates = unique(candidates_dt, by = "uid"), ld_pairs = unique(ld_pairs_dt))
 
     # mark the candidate SNPs as assigned (so future independent picks skip)
     for (cuid in unique(candidates_dt$uid)) assign(cuid, TRUE, envir = assigned_uids)
@@ -335,7 +458,7 @@ for (chrom in chroms) {
   chrom_ld_pairs <- rbindlist(lapply(candidate_inds, function(x) x$ld_pairs), fill = TRUE)
   chrom_candidates <- rbindlist(lapply(candidate_inds, function(x) {
     # add a column topLead to indicate source ind
-    x$candidates[, topLead := x$ind_row[[rs_col]]]
+    x$candidates[, topLead := x$resolved_rs]
     x$candidates
   }), use.names = TRUE, fill = TRUE)
   chrom_indsig <- rbindlist(lapply(seq_along(candidate_inds), function(ii) {
@@ -344,7 +467,7 @@ for (chrom in chroms) {
     nGWASSNPs <- sum(!is.na(x$candidates$gwasP))
     data.table(
       ind_uid = x$ind_uid,
-      rsID = as.character(x$ind_row[[rs_col]]),
+      rsID = as.character(x$resolved_rs),
       chr = x$ind_row$chr,
       pos = x$ind_row$bp,
       p = x$ind_row$p,
@@ -363,7 +486,8 @@ for (chrom in chroms) {
   # Create mapping from ind_uid to index
   ind_uids <- chrom_indsig$ind_uid
   ind_idx <- seq_along(ind_uids)
-  uid_to_idx <- setNames(ind_idx, ind_uids)
+  uid_to_idx <- as.list(ind_idx)
+  names(uid_to_idx) <- ind_uids
   edges <- list()
   if (nrow(chrom_ld_pairs) > 0) {
     for (r in seq_len(nrow(chrom_ld_pairs))) {
