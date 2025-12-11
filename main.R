@@ -61,12 +61,12 @@ merged <- merge_fuma_loci(fuma_list)
 mehdi <- read_reported_loci("inputs/mehdi2024.txt")
 mehdi
 
-# Refine with reported loci
-refined <- refine_with_reported(merged, mehdi)
-summary(refined)
+# Align with reported loci
+aligned <- align_with_reported(merged, mehdi)
+summary(aligned)
 
-# Export refined loci to Excel
-export_refined_to_excel(refined, "refined_loci.xlsx")
+# Export aligned loci to Excel
+export_aligned_to_excel(aligned, "aligned_loci.xlsx")
 
 # Single file
 chi <- read_gwas("inputs/GWAS/CHI.tsv", name = "CHI")
