@@ -34,7 +34,7 @@ fuma_list <- read_fuma(c(
 merged <- merge_fuma_loci(fuma_list)
 
 # Export to Excel with visualization
-export_merged_to_excel(merged, fuma_list, output_file = "merged_loci.xlsx")
+#export_merged_to_excel(merged, fuma_list, output_file = "merged_loci.xlsx")
 
 # Merge overlapping loci only
 merged <- merge_fuma_loci(fuma_list)

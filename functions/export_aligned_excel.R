@@ -73,6 +73,8 @@ export_aligned_to_excel <- function(aligned_loci, output_file) {
 
     start_row_idx <- length(excel_rows) + 1
     first_label <- TRUE
+    fuma_starts <- numeric(0)
+    fuma_ends <- numeric(0)
 
     original_loci_string <- subset_rows$ORIGINAL_LOCI[1]
     if (!is.na(original_loci_string) && nzchar(original_loci_string)) {
@@ -86,6 +88,9 @@ export_aligned_to_excel <- function(aligned_loci, output_file) {
           source_name <- matches[[1]][3]
           locus_start <- as.numeric(matches[[1]][4])
           locus_end <- as.numeric(matches[[1]][5])
+
+          fuma_starts <- c(fuma_starts, locus_start)
+          fuma_ends <- c(fuma_ends, locus_end)
 
           excel_rows[[length(excel_rows) + 1]] <- data.frame(
             MERGED_LOCUS_ID = if (first_label) merged_id else "",
@@ -107,14 +112,46 @@ export_aligned_to_excel <- function(aligned_loci, output_file) {
       }
     }
 
+    reported_starts <- subset_rows$START[is.finite(subset_rows$START)]
+    reported_ends <- subset_rows$END[is.finite(subset_rows$END)]
+
+    span_starts <- c(fuma_starts, reported_starts, merged_start)
+    span_ends <- c(fuma_ends, reported_ends, merged_end)
+    span_starts <- span_starts[is.finite(span_starts)]
+    span_ends <- span_ends[is.finite(span_ends)]
+
+    if (length(span_starts) == 0) {
+      viz_start <- merged_start
+    } else {
+      viz_start <- min(span_starts)
+    }
+
+    if (length(span_ends) == 0) {
+      viz_end <- merged_end
+    } else {
+      viz_end <- max(span_ends)
+    }
+
+    if (!is.finite(viz_start)) {
+      viz_start <- merged_start
+    }
+    if (!is.finite(viz_end)) {
+      viz_end <- merged_end
+    }
+
+    viz_width <- viz_end - viz_start + 1
+    if (!is.finite(viz_width) || viz_width <= 0) {
+      viz_width <- 1
+    }
+
     if (first_label) {
       excel_rows[[length(excel_rows) + 1]] <- data.frame(
         MERGED_LOCUS_ID = merged_id,
         ALIGNMENT_ID = paste0(merged_id, "_PLACEHOLDER"),
         CHR = merged_chr,
-        START = merged_start,
-        END = merged_end,
-        WIDTH = merged_width,
+        START = viz_start,
+        END = viz_end,
+        WIDTH = viz_width,
         REPORTED_LOCUS = "FUMA",
         REPORTED_SOURCE = "FUMA",
         ALIGNMENT_STATUS = "source",
@@ -130,9 +167,9 @@ export_aligned_to_excel <- function(aligned_loci, output_file) {
       MERGED_LOCUS_ID = "",
       ALIGNMENT_ID = paste0(merged_id, "_MERGED"),
       CHR = merged_chr,
-      START = merged_start,
-      END = merged_end,
-      WIDTH = merged_width,
+      START = viz_start,
+      END = viz_end,
+      WIDTH = viz_width,
       REPORTED_LOCUS = "MERGED",
       REPORTED_SOURCE = "MERGED",
       ALIGNMENT_STATUS = "merged",
@@ -150,9 +187,9 @@ export_aligned_to_excel <- function(aligned_loci, output_file) {
       disp_width <- row$WIDTH
 
       if (status == "unmatched") {
-        disp_start <- merged_start
-        disp_end <- merged_end
-        disp_width <- merged_width
+        disp_start <- viz_start
+        disp_end <- viz_end
+        disp_width <- viz_width
       }
 
       excel_rows[[length(excel_rows) + 1]] <- data.frame(
@@ -177,9 +214,9 @@ export_aligned_to_excel <- function(aligned_loci, output_file) {
       start = start_row_idx,
       end = end_row_idx,
       merged_id = merged_id,
-      merged_start = merged_start,
-      merged_end = merged_end,
-      merged_width = merged_width
+      merged_start = viz_start,
+      merged_end = viz_end,
+      merged_width = viz_width
     )
   }
 
