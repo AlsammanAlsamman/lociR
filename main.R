@@ -65,21 +65,16 @@ mehdi
 aligned <- align_with_reported(merged, mehdi)
 summary(aligned)
 
-# Export aligned loci to Excel
-export_aligned_to_excel(aligned, "aligned_loci.xlsx")
 
-# Single file
-chi <- read_gwas("inputs/GWAS/CHI.tsv", name = "CHI")
-print(chi)
-summary(chi)
 
 # Multiple files
 gwas_list <- read_gwas(
-  c("CHI.tsv", "EUR.tsv", "Hisp.tsv"),
-  name = c("CHI", "EUR", "Hisp"),
+  c("inputs/GWAS/CHI.tsv", "inputs/GWAS/EUR.tsv", "inputs/GWAS/Hisp.tsv","inputs/GWAS/HispCHI.tsv","inputs/GWAS/HispEUR.tsv","inputs/GWAS/HispEURCHI.tsv"),
+  name = c("CHI", "EUR", "Hisp","HispCHI","HispEUR","HispEURCHI"),
   pvalue_threshold = 5e-4
 )
 
-# Access individual datasets
-gwas_list$CHI$data
-gwas_list$EUR$name
+
+# Export aligned loci to Excel
+export_aligned_to_excel(aligned, "aligned_loci.xlsx", gwas_list = gwas_list)
+
