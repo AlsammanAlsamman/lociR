@@ -9,13 +9,53 @@
 #' @param pvalue_threshold Numeric. Maximum p-value threshold for filtering SNPs. Default: 5e-4
 #' @param sep Character. Field separator. Default: "\t" (tab-separated)
 #' @param header Logical. Whether file has header. Default: TRUE
+#' @param rdata_file Optional character. Path to a cached GWAS object saved on disk
+#'   (".RData"/".rda" via `save()` or ".rds" via `saveRDS()`). If provided and the
+#'   file exists, `read_gwas()` will load it and skip reading/filtering the GWAS
+#'   text files.
+#' @param save_rdata Logical. If `TRUE` and `rdata_file` is provided (and does not
+#'   already exist), save the returned object to disk for faster future runs.
+#'   Default: TRUE.
 #' @return If single file: Object of class 'GWAS'. If multiple files: Named list of GWAS objects
 #' @export
 read_gwas <- function(file_path, 
                       name = NULL,
                       pvalue_threshold = 5e-4, 
                       sep = "\t",
-                      header = TRUE) {
+                      header = TRUE,
+                      rdata_file = NULL,
+                      save_rdata = TRUE) {
+
+  # Optional caching: if cache exists, load and return immediately.
+  if (!is.null(rdata_file) && nzchar(trimws(rdata_file)) && file.exists(rdata_file)) {
+    message(sprintf(
+      "GWAS cache found: %s\nWe will NOT read the GWAS files; loading cached object instead.\nTo re-read and re-filter the GWAS files, remove the rdata_file parameter (or delete the cache file).\n",
+      normalizePath(rdata_file, winslash = "/", mustWork = FALSE)
+    ))
+
+    ext <- tolower(tools::file_ext(rdata_file))
+    if (ext == "rds") {
+      return(readRDS(rdata_file))
+    }
+
+    cache_env <- new.env(parent = emptyenv())
+    loaded_names <- load(rdata_file, envir = cache_env)
+
+    if (length(loaded_names) == 1 && exists(loaded_names, envir = cache_env, inherits = FALSE)) {
+      return(get(loaded_names, envir = cache_env, inherits = FALSE))
+    }
+    if (exists("gwas_cache", envir = cache_env, inherits = FALSE)) {
+      return(get("gwas_cache", envir = cache_env, inherits = FALSE))
+    }
+    if (exists("gwas_list", envir = cache_env, inherits = FALSE)) {
+      return(get("gwas_list", envir = cache_env, inherits = FALSE))
+    }
+
+    stop(
+      "Loaded RData file contains multiple objects and none named 'gwas_cache'/'gwas_list'. ",
+      "Please re-save the cache with a single object, or as 'gwas_cache'."
+    )
+  }
   
   # Handle multiple files
   if (length(file_path) > 1) {
@@ -36,6 +76,19 @@ read_gwas <- function(file_path,
     names(gwas_list) <- name
     
     message("\n=== All GWAS files loaded successfully ===\n")
+
+    if (!is.null(rdata_file) && nzchar(trimws(rdata_file)) && isTRUE(save_rdata) && !file.exists(rdata_file)) {
+      dir.create(dirname(rdata_file), recursive = TRUE, showWarnings = FALSE)
+      ext <- tolower(tools::file_ext(rdata_file))
+      if (ext == "rds") {
+        saveRDS(gwas_list, file = rdata_file)
+      } else {
+        gwas_cache <- gwas_list
+        save(gwas_cache, file = rdata_file)
+      }
+      message(sprintf("Saved GWAS cache to: %s", normalizePath(rdata_file, winslash = "/", mustWork = FALSE)))
+    }
+
     return(gwas_list)
   }
   
@@ -44,7 +97,20 @@ read_gwas <- function(file_path,
     name <- tools::file_path_sans_ext(basename(file_path))
   }
   
-  return(read_gwas_single(file_path, name, pvalue_threshold, sep, header))
+  gwas_obj <- read_gwas_single(file_path, name, pvalue_threshold, sep, header)
+  if (!is.null(rdata_file) && nzchar(trimws(rdata_file)) && isTRUE(save_rdata) && !file.exists(rdata_file)) {
+    dir.create(dirname(rdata_file), recursive = TRUE, showWarnings = FALSE)
+    ext <- tolower(tools::file_ext(rdata_file))
+    if (ext == "rds") {
+      saveRDS(gwas_obj, file = rdata_file)
+    } else {
+      gwas_cache <- gwas_obj
+      save(gwas_cache, file = rdata_file)
+    }
+    message(sprintf("Saved GWAS cache to: %s", normalizePath(rdata_file, winslash = "/", mustWork = FALSE)))
+  }
+
+  return(gwas_obj)
 }
 
 
@@ -180,27 +246,52 @@ standardize_gwas_columns <- function(data) {
   
   # Handle unmapped columns
   unmapped <- original_cols[!mapped_indices]
-  
+
   if (length(unmapped) > 0) {
-    message(sprintf("  Note: Unmapped columns will be removed: %s", 
+    message(sprintf("  Note: Unmapped columns will be removed: %s",
                     paste(unmapped, collapse = ", ")))
   }
-  
-  # Check for duplicate column names after mapping
-  if (any(duplicated(new_cols[mapped_indices]))) {
-    duplicates <- new_cols[mapped_indices][duplicated(new_cols[mapped_indices])]
-    warning("Duplicate standard names detected: ", paste(unique(duplicates), collapse = ", "),
-            "\nKeeping first occurrence only")
-    
-    # Keep only first occurrence of each name
-    keep_idx <- !duplicated(new_cols) & mapped_indices
-    data <- data[, keep_idx, drop = FALSE]
-    new_cols <- new_cols[keep_idx]
-  } else {
-    # Keep only mapped columns
-    data <- data[, mapped_indices, drop = FALSE]
-    new_cols <- new_cols[mapped_indices]
+
+  # Keep only mapped columns first
+  mapped_original_cols <- original_cols[mapped_indices]
+  mapped_new_cols <- new_cols[mapped_indices]
+  data <- data[, mapped_indices, drop = FALSE]
+
+  # Resolve duplicates deterministically by alias priority.
+  # Example: if both SNP and RSID exist, prefer RSID/rsid over SNP.
+  if (any(duplicated(mapped_new_cols))) {
+    keep_local <- rep(FALSE, length(mapped_new_cols))
+    dup_names <- unique(mapped_new_cols[duplicated(mapped_new_cols)])
+
+    for (std_name in unique(mapped_new_cols)) {
+      idx <- which(mapped_new_cols == std_name)
+      if (length(idx) == 1) {
+        keep_local[idx] <- TRUE
+        next
+      }
+
+      aliases <- gwas_mapping[[std_name]]
+      alias_rank <- match(tolower(mapped_original_cols[idx]), tolower(aliases))
+      alias_rank[is.na(alias_rank)] <- length(aliases) + 999L
+      best_rank <- min(alias_rank)
+      best_idx_candidates <- idx[alias_rank == best_rank]
+      best_idx <- best_idx_candidates[1]
+      keep_local[best_idx] <- TRUE
+
+      dropped <- mapped_original_cols[setdiff(idx, best_idx)]
+      if (length(dropped) > 0) {
+        message(sprintf("  Note: Multiple columns mapped to '%s'; keeping '%s' and dropping: %s",
+                        std_name,
+                        mapped_original_cols[best_idx],
+                        paste(dropped, collapse = ", ")))
+      }
+    }
+
+    data <- data[, keep_local, drop = FALSE]
+    mapped_new_cols <- mapped_new_cols[keep_local]
   }
+
+  new_cols <- mapped_new_cols
   
   # Apply new column names
   colnames(data) <- new_cols

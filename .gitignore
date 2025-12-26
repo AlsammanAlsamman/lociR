@@ -31,3 +31,5 @@ inputs/
 *.bed
 *.fam
 *.log
+*.txt
+prompt/

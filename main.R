@@ -1,4 +1,3 @@
-setwd("/s/nath-lab/alsamman/____MyCodes____/lociR")
 # Main script for lociR package
 # Load libraries
 source("libraries.R")
@@ -71,10 +70,35 @@ summary(aligned)
 gwas_list <- read_gwas(
   c("inputs/GWAS/CHI.tsv", "inputs/GWAS/EUR.tsv", "inputs/GWAS/Hisp.tsv","inputs/GWAS/HispCHI.tsv","inputs/GWAS/HispEUR.tsv","inputs/GWAS/HispEURCHI.tsv"),
   name = c("CHI", "EUR", "Hisp","HispCHI","HispEUR","HispEURCHI"),
-  pvalue_threshold = 5e-4
+  pvalue_threshold = 5e-4,
+  rdata_file = "outputs/gwas_cache.RData"
 )
 
 
 # Export aligned loci to Excel
-export_aligned_to_excel(aligned, "aligned_loci.xlsx", gwas_list = gwas_list)
+#export_aligned_to_excel(aligned, "aligned_loci.xlsx", gwas_list = gwas_list)
 
+export_aligned_to_excel_roundtrip(aligned, "outputs/aligned_roundtrip.xlsx", gwas_list = gwas_list, flank_bp = 20000, n_bins = 20)
+
+export_aligned_to_html_tsv(
+  aligned = aligned,
+  out_prefix = "outputs/aligned_review",
+  gwas_list = gwas_list,
+  flank_bp = 20000
+)
+
+export_aligned_to_html_editable(
+  aligned_loci = aligned,
+  output_html = "outputs/aligned_editable.html",
+  flank_bp = 20000,
+  n_bins = 20
+)
+
+export_aligned_to_html_locus_wizard(
+  aligned_loci = aligned,
+  output_html = "outputs/aligned_locus_wizard.html",
+  flank_bp = 20000,
+  n_bins = 20,
+  gwas_list = gwas_list,
+  window_bp = 20000
+)
