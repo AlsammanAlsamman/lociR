@@ -1,10 +1,14 @@
+setwd("/s/nath-lab/alsamman/____MyCodes____/lociR")
 # Main script for lociR package
 # Load libraries
 source("libraries.R")
 
 # Load all functions
 source("functions/load_functions.R")
-load_all_functions()
+load_all_functions("functions")
+
+# Note: the locus wizard exporter now uses helper templates in
+# functions/locus_wizard_templates.R (loaded by load_all_functions()).
 
 # Main workflow
 fuma <- read_fuma("inputs/Hisp.txt")
@@ -78,21 +82,22 @@ gwas_list <- read_gwas(
 # Export aligned loci to Excel
 #export_aligned_to_excel(aligned, "aligned_loci.xlsx", gwas_list = gwas_list)
 
-export_aligned_to_excel_roundtrip(aligned, "outputs/aligned_roundtrip.xlsx", gwas_list = gwas_list, flank_bp = 20000, n_bins = 20)
+# export_aligned_to_excel_roundtrip(aligned, "outputs/aligned_roundtrip.xlsx", gwas_list = gwas_list, flank_bp = 20000, n_bins = 20)
+# 
+# export_aligned_to_html_tsv(
+#   aligned = aligned,
+#   out_prefix = "outputs/aligned_review",
+#   gwas_list = gwas_list,
+#   flank_bp = 20000
+# )
+# 
+# export_aligned_to_html_editable(
+#   aligned_loci = aligned,
+#   output_html = "outputs/aligned_editable.html",
+#   flank_bp = 20000,
+#   n_bins = 20
+# )
 
-export_aligned_to_html_tsv(
-  aligned = aligned,
-  out_prefix = "outputs/aligned_review",
-  gwas_list = gwas_list,
-  flank_bp = 20000
-)
-
-export_aligned_to_html_editable(
-  aligned_loci = aligned,
-  output_html = "outputs/aligned_editable.html",
-  flank_bp = 20000,
-  n_bins = 20
-)
 
 export_aligned_to_html_locus_wizard(
   aligned_loci = aligned,
