@@ -121,6 +121,43 @@ export_newdisc_meta_individual_report_excel <- function(
     format(round(x, digits), scientific = scientific, trim = TRUE)
   }
 
+  add_fill_runs <- function(wb, sheet, col_idx, row_idx_vec, color_obj) {
+    if (length(row_idx_vec) == 0 || !is.finite(col_idx)) return(invisible(NULL))
+    row_idx_vec <- sort(unique(as.integer(row_idx_vec)))
+    if (length(row_idx_vec) == 0) return(invisible(NULL))
+
+    run_start <- row_idx_vec[[1]]
+    run_prev <- row_idx_vec[[1]]
+
+    flush_run <- function(s, e) {
+      col_letter <- openxlsx2::int2col(col_idx)
+      dims <- if (s == e) {
+        paste0(col_letter, s + 1L)
+      } else {
+        paste0(col_letter, s + 1L, ":", col_letter, e + 1L)
+      }
+      wb$add_fill(sheet = sheet, dims = dims, color = color_obj)
+    }
+
+    if (length(row_idx_vec) == 1) {
+      flush_run(run_start, run_prev)
+      return(invisible(NULL))
+    }
+
+    for (k in 2:length(row_idx_vec)) {
+      cur <- row_idx_vec[[k]]
+      if (cur == run_prev + 1L) {
+        run_prev <- cur
+      } else {
+        flush_run(run_start, run_prev)
+        run_start <- cur
+        run_prev <- cur
+      }
+    }
+    flush_run(run_start, run_prev)
+    invisible(NULL)
+  }
+
   # ---------------------------
   # Read loci
   # ---------------------------
@@ -518,6 +555,22 @@ export_newdisc_meta_individual_report_excel <- function(
 
   wb$add_worksheet(report_sheet)
   wb$add_data(sheet = report_sheet, x = report_df, start_row = 1, start_col = 1)
+
+  # OR-based cell highlighting: >1 light red, <1 light blue
+  red_fill <- openxlsx2::wb_color(hex = "FFFFC7CE")
+  blue_fill <- openxlsx2::wb_color(hex = "FFDDEBF7")
+
+  or_cols <- which(grepl("_OR_FROM_BETA$|^META_.*(^|_)OR($|_)", colnames(report_df), ignore.case = TRUE))
+  if (length(or_cols) > 0) {
+    for (j in or_cols) {
+      v <- suppressWarnings(as.numeric(report_df[[j]]))
+      rows_red <- which(is.finite(v) & v > 1)
+      rows_blue <- which(is.finite(v) & v < 1)
+      if (length(rows_red) > 0) add_fill_runs(wb, report_sheet, j, rows_red, red_fill)
+      if (length(rows_blue) > 0) add_fill_runs(wb, report_sheet, j, rows_blue, blue_fill)
+    }
+  }
+
   wb$set_col_widths(sheet = report_sheet, cols = 1:ncol(report_df), widths = "auto")
 
   wb$save(output_file)
