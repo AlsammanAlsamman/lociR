@@ -215,10 +215,10 @@ standardize_gwas_columns <- function(data) {
   gwas_mapping <- list(
     CHR = c("chr", "chrom", "chromosome", "CHR", "CHROM", "Chromosome"),
     POS = c("pos", "position", "bp", "POS", "BP", "Position", "base_pair_location"),
-    RSID = c("rsid", "snp", "rsID", "rs", "SNP", "RSID", "MarkerName", "variant_id", "marker"),
+    RSID = c("rsid", "snp", "rsID", "rs", "SNP", "RSID", "MarkerName", "variant_id", "marker", "snpid", "varid", "id"),
     P = c("p", "pval", "p_value", "pvalue", "P", "PVAL", "P_VALUE", "Pvalue", "P-value"),
     EFFECT_ALLELE = c("effectallele", "effect_allele", "allele1", "a1", "A1", "ea", "EA", "Allele1"),
-    OTHER_ALLELE = c("otherallele", "other_allele", "allele2", "a2", "A2", "oa", "OA", "Allele2", "ref"),
+    OTHER_ALLELE = c("otherallele", "other_allele", "allele2", "a2", "A2", "oa", "OA", "Allele2", "ref", "nea", "NEA", "non_effect_allele"),
     BETA = c("beta", "Beta", "BETA", "effect", "Effect"),
     SE = c("se", "SE", "std_err", "stderr", "standard_error", "StdErr"),
     OR = c("or", "OR", "odds_ratio", "OddsRatio")

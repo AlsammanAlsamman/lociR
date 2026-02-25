@@ -46,6 +46,26 @@ align_with_reported <- function(merged_loci,
     default
   }
 
+  # Normalize chromosome labels so seqlevels are comparable across inputs
+  # (e.g., 23 <-> X, 24 <-> Y, 25/26 <-> MT).
+  normalize_chr <- function(chr) {
+    out <- trimws(as.character(chr))
+    out <- gsub("^chr", "", out, ignore.case = TRUE)
+
+    is_numeric_like <- grepl("^[0-9]+$", out)
+    numeric_part <- suppressWarnings(as.integer(out))
+
+    out[is_numeric_like & !is.na(numeric_part) & numeric_part == 23L] <- "X"
+    out[is_numeric_like & !is.na(numeric_part) & numeric_part == 24L] <- "Y"
+    out[is_numeric_like & !is.na(numeric_part) & numeric_part %in% c(25L, 26L)] <- "MT"
+
+    out[toupper(out) %in% c("X")] <- "X"
+    out[toupper(out) %in% c("Y")] <- "Y"
+    out[toupper(out) %in% c("M", "MT", "MTR", "CHRM")] <- "MT"
+
+    out
+  }
+
   # Combine list input of reported loci
   if (is.list(reported_loci) && !is.data.frame(reported_loci)) {
     message("Combining ", length(reported_loci), " reported loci sources...")
@@ -72,7 +92,7 @@ align_with_reported <- function(merged_loci,
   merged_loci <- as.data.frame(merged_loci, stringsAsFactors = FALSE)
   reported_loci <- as.data.frame(reported_loci, stringsAsFactors = FALSE)
 
-  merged_loci$CHR <- as.character(merged_loci$CHR)
+  merged_loci$CHR <- normalize_chr(merged_loci$CHR)
   merged_loci$START <- as.numeric(merged_loci$START)
   merged_loci$END <- as.numeric(merged_loci$END)
   if (!"WIDTH" %in% colnames(merged_loci)) {
@@ -80,7 +100,7 @@ align_with_reported <- function(merged_loci,
   }
 
   if (nrow(reported_loci) > 0) {
-    reported_loci$CHR <- as.character(reported_loci$CHR)
+    reported_loci$CHR <- normalize_chr(reported_loci$CHR)
     reported_loci$START <- as.numeric(reported_loci$START)
     reported_loci$END <- as.numeric(reported_loci$END)
   }
@@ -89,24 +109,42 @@ align_with_reported <- function(merged_loci,
           nrow(reported_loci), " reported loci ...")
   message("Maximum distance threshold: ", format(max_distance, big.mark = ","), " bp")
 
-  merged_gr <- GenomicRanges::GRanges(
-    seqnames = merged_loci$CHR,
-    ranges = IRanges::IRanges(start = merged_loci$START, end = merged_loci$END)
-  )
-
+  query_hits <- integer(0)
+  subject_hits <- integer(0)
   if (nrow(reported_loci) > 0) {
-    reported_gr <- GenomicRanges::GRanges(
-      seqnames = reported_loci$CHR,
-      ranges = IRanges::IRanges(start = reported_loci$START, end = reported_loci$END)
-    )
-    overlaps <- GenomicRanges::findOverlaps(merged_gr,
-                                            reported_gr,
-                                            maxgap = max(0, max_distance))
-    query_hits <- S4Vectors::queryHits(overlaps)
-    subject_hits <- S4Vectors::subjectHits(overlaps)
-  } else {
-    query_hits <- integer(0)
-    subject_hits <- integer(0)
+    common_chr <- intersect(unique(merged_loci$CHR), unique(reported_loci$CHR))
+
+    if (length(common_chr) > 0) {
+      merged_overlap_idx <- which(merged_loci$CHR %in% common_chr)
+      reported_overlap_idx <- which(reported_loci$CHR %in% common_chr)
+
+      merged_gr <- GenomicRanges::GRanges(
+        seqnames = merged_loci$CHR[merged_overlap_idx],
+        ranges = IRanges::IRanges(
+          start = merged_loci$START[merged_overlap_idx],
+          end = merged_loci$END[merged_overlap_idx]
+        )
+      )
+
+      reported_gr <- GenomicRanges::GRanges(
+        seqnames = reported_loci$CHR[reported_overlap_idx],
+        ranges = IRanges::IRanges(
+          start = reported_loci$START[reported_overlap_idx],
+          end = reported_loci$END[reported_overlap_idx]
+        )
+      )
+
+      overlaps <- GenomicRanges::findOverlaps(
+        merged_gr,
+        reported_gr,
+        maxgap = max(0, max_distance)
+      )
+
+      query_hits <- merged_overlap_idx[S4Vectors::queryHits(overlaps)]
+      subject_hits <- reported_overlap_idx[S4Vectors::subjectHits(overlaps)]
+    } else {
+      message("No shared chromosomes between merged and reported loci; all rows will be unmatched.")
+    }
   }
 
   aligned_rows <- list()
